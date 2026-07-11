@@ -1,0 +1,525 @@
+let maxResponseLength = 30000
+let workspacePath = "/workspace"
+
+"""
+A Dagger-native sandboxed coding agent.
+"""
+type Editor {
+  """
+  Returns a basic coding agent
+  """
+  agent(base: LLM! = llm): LLM! {
+    base
+      .withTools(currentNode, except: ["agent"])
+      .withSystemPrompt("""
+        You are an autonomous, sandboxed coding agent running in Dagger.
+
+        Guidelines:
+        - Use Find and Grep for file discovery (ls, find, rg equivalents)
+        - Use Read to examine files before editing
+        - Use Edit for precise changes (oldText must match exactly)
+        - Use Write only for new files or complete rewrites
+        - Be concise in your responses
+        - Show file paths clearly when working with files
+        - Follow existing conventions in files that you edit
+        - NEVER proactively create documentation files (*.md) or README files
+        - Always prefer editing an existing file to creating a new one
+        - Do what has been asked; nothing more, nothing less
+        - Use multiple tool calls concurrently whenever possible
+      """)
+      .withSystemPrompt(reminderPrompt(base.workspace))
+  }
+
+  let todos: [TODO!]! = []
+
+  """
+  Keep track of your TODO list
+
+  WHEN TO USE THIS TOOL:
+  	- When a task requires 3 or more distinct steps or actions
+  	- To break down a complex task into smaller, manageable parts
+  	- When the user directly gave a sequence of tasks to perform (numbered
+  		or comma-separated)
+  	- When the user gave you more tasks in the middle of a conversation
+  	- When you want to see the full TODO list
+
+  SKIP THIS TOOL WHEN:
+  	- The task is trivial
+  	- The task is purely conversational or informational
+
+  HOW TO USE:
+  	- Call this function with the TODOs to record in each state (pending,
+  		in progress, completed)
+  	- TODOs are additive; you can call it with incremental updates for
+  		individual TODOs
+  	- The full TODO list will be printed in response
+  	- Every pending TODO must be eventually completed before your task is
+  		completed
+  	- To print the current TODO list, call this function with no arguments
+  """
+  todoWrite(
+    pending: [String!]! = [],
+    inProgress: [String!]! = [],
+    completed: [String!]! = [],
+  ): Editor! {
+    # Build list of all descriptions being updated
+    let updatingDescriptions = pending + inProgress + completed
+
+    let existingPending: [String!]! = []
+    let existingInProgress: [String!]! = []
+    let existingDone: [String!]! = []
+    todos.each { todo =>
+      # Only keep existing TODOs that aren't being updated
+      if (updatingDescriptions.contains(todo.description)) {
+        continue
+      }
+      case (todo.status) {
+        TODOStatus.DONE => {
+          existingDone += [todo.description]
+        }
+
+        TODOStatus.IN_PROGRESS => {
+          existingInProgress += [todo.description]
+        }
+
+        TODOStatus.PENDING => {
+          existingPending += [todo.description]
+        }
+      }
+    }
+
+    self.todos = []
+    self.todos += (existingDone + completed).map { desc =>
+      TODO(TODOStatus.DONE, desc)
+    }
+    self.todos += (existingInProgress + inProgress).map { desc =>
+      TODO(TODOStatus.IN_PROGRESS, desc)
+    }
+    self.todos += (existingPending + pending).map { desc =>
+      TODO(TODOStatus.PENDING, desc)
+    }
+
+    self.todos.each { todo =>
+      let prefix = case (todo.status) {
+        TODOStatus.DONE => "■ \x1b[32m\x1b[9m"
+        TODOStatus.IN_PROGRESS => "□ \x1b[33m"
+        TODOStatus.PENDING => "□ \x1b[37m"
+      }
+      print(prefix + todo.description + "\x1b[0m\n")
+    }
+
+    self
+  }
+
+  """
+  Read the contents of a file. Output is truncated to 2000 lines by default. Each line is prefixed with its line number. Use offset/limit for large files. When you need the full file, continue with offset until complete.
+  """
+  read(
+    source: Workspace!,
+    """
+    Relative path within the workspace
+    """
+    filePath: String!,
+    """
+    Line offset to start reading from
+    """
+    offset: Int! = 0,
+    """
+    Limit the number of lines read
+    """
+    limit: Int! = 2000,
+  ): String! {
+    let fileContents = source
+      .file(normalize(filePath))
+      .contents(
+        offsetLines: offset,
+        limitLines: limit,
+      )
+
+    if (fileContents == "") {
+      "WARNING: File contents are empty."
+    } else {
+      fileContents
+        .split("\n", 0)
+        .map { line, i =>
+          `${toString(offset + i + 1).padLeft(6)}→${line}`
+        }
+        .join("\n")
+    }
+  }
+
+  """
+  Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.
+  """
+  write(
+    source: Workspace!,
+    """
+    Relative path within the workspace
+    """
+    filePath: String!,
+    """
+    Complete file content to write
+    """
+    contents: String!,
+    """
+    Force-write the file - only used to resolve merge conflicts
+    """
+    force: Boolean! = false,
+  ): Changeset! {
+    let normalizedPath = normalize(filePath)
+    let base = source.directory(".", include: [normalizedPath])
+    base.withNewFile(normalize(filePath), contents).changes(base)
+  }
+
+  """
+  Edit a file by replacing exact text. The oldText must match exactly (including whitespace). Use this for precise, surgical edits. For larger edits, use the Write tool to overwrite files.
+  """
+  edit(
+    source: Workspace!,
+    """
+    Relative path within the workspace
+    """
+    filePath: String!,
+    """
+    Unique search string to replace within the file, or non-unique if replaceAll is true
+    """
+    oldText: String!,
+    """
+    New text content
+    """
+    newText: String!,
+    """
+    Replace all occurrences
+    """
+    replaceAll: Boolean! = false,
+    """
+    Force-write the file - only used to resolve merge conflicts
+    """
+    force: Boolean! = false,
+  ): Changeset! {
+    let normalizedPath = normalize(filePath)
+    let base = source.directory(".", include: [normalizedPath])
+    base
+      .withFile(
+        normalizedPath,
+        source
+          .file(normalizedPath)
+          .withReplaced(oldText, newText, all: replaceAll),
+      )
+      .changes(base)
+  }
+
+  # """
+  # Remove a file or directory.
+  # """
+  # pub rm(
+  #   source: Workspace!,
+  #   """
+  #   Relative path within the workspace
+  #   """
+  #   path: String!,
+  #   """
+  #   Force-remove the file - only used to resolve merge conflicts
+  #   """
+  #   force: Boolean! = false,
+  # ): Changeset! {
+  #   let normalizedPath = normalize(path)
+  #   let base = source
+  #     .directory(".", include: [normalizedPath])
+  #   let changes = base.withoutFile(path).changes(base)
+  #   source.stage(changes, force: force)
+  #   changes
+  # }
+
+  # """
+  # Rename or move a file or directory. Parent directories are created automatically.
+  # """
+  # pub mv(
+  #   source: Workspace!,
+  #   """
+  #   Relative path within the workspace of the file or directory to move
+  #   """
+  #   oldPath: String!,
+  #   """
+  #   Destination path within the workspace
+  #   """
+  #   newPath: String!,
+  #   """
+  #   Force-move the file - only used to resolve merge conflicts
+  #   """
+  #   force: Boolean! = false,
+  # ): Changeset {
+  #   let normalizedPath = normalize(oldPath)
+  #   let base = source
+  #     .directory(".", include: [normalizedPath])
+  #   let changes = if (base.exists(oldPath, expectedType: ExistsType.REGULAR_TYPE)) {
+  #     base
+  #       .withFile(newPath, source.file(oldPath))
+  #       .withoutFile(oldPath)
+  #       .changes(base)
+  #   } else if (base.exists(oldPath, expectedType: ExistsType.DIRECTORY_TYPE)) {
+  #     base
+  #       .withDirectory(newPath, source.directory(oldPath))
+  #       .withoutDirectory(oldPath)
+  #       .changes(base)
+  #   }
+  #   source.stage(changes)
+  #   changes
+  # }
+  # """
+  # Run checks (tests, lints, etc.), optionally filtering by glob patterns (e.g. `test:*`, `go:*`).
+  # """
+  # pub checks(workspace: Workspace!, include: [String!]! = []): Void {
+  #   let matched = currentEnv.withWorkspace(workspace).checks(include)
+  #   if (matched.list.{name}.isEmpty) {
+  #     print("WARNING: no checks matched. Available checks:")
+  #     listChecks
+  #   } else {
+  #     print(matched.run.report.contents)
+  #   }
+  # }
+
+  # """
+  # List available checks.
+  # """
+  # pub listChecks(include: [String!]! = []): Void {
+  #   currentEnv.checks(include).list.{name, description}.each { x =>
+  #     if (x.description != "") {
+  #       print(x.name + ": " + x.description)
+  #     } else {
+  #       print(x.name)
+  #     }
+  #   }
+  #   null
+  # }
+  # """
+  # Commit staged changes. All prior EditFile, Write, Rm, and Mv changes are included. Returns the commit hash.
+  # """
+  # commit(
+  #   source: Workspace!,
+  #   """
+  #   The commit message
+  #   """
+  #   message: String!,
+  # ): String! {
+  #   source.commit(message)
+  # }
+  """
+  Find paths by glob pattern. Use '**' to match across directories.
+  """
+  find(
+    source: Workspace!,
+    """
+    Relative glob pattern to find within the workspace
+    """
+    pattern: String!,
+  ): String! {
+    let matches = source.glob(pattern)
+    if (matches.length == 0) {
+      "No files found."
+    } else {
+      matches.join("\n")
+    }
+  }
+
+  """
+  Search file contents for a regex pattern. Respects .gitignore. Use literalText for exact matches. Use glob to filter by file type.
+  """
+  grep(
+    source: Workspace!,
+    """
+    Regular expression pattern to grep for
+    """
+    regex: String!,
+    """
+    Treat pattern as literal text instead of a regular expression
+    """
+    literalText: Boolean! = false,
+    """
+    Relative paths within the workspace to limit the search
+    """
+    paths: [String!]! = [],
+    """
+    Relative path globs within the workspace to limit the search
+    """
+    glob: [String!]! = [],
+    """
+    Allow the pattern to span multiple lines
+    """
+    multiline: Boolean! = false,
+    """
+    Show the matching content
+    """
+    content: Boolean! = true,
+    """
+    Case-insensitive search
+    """
+    insensitive: Boolean! = false,
+    """
+    Limit the number of matches
+    """
+    limit: Int! = 1000,
+  ): String! {
+    let normalizedPaths = paths.map { normalize(_) }
+
+    let matches = source.search(
+      pattern: regex,
+      literal: literalText,
+      paths: normalizedPaths,
+      globs: glob,
+      multiline: multiline,
+      dotall: multiline,
+      filesOnly: !content,
+      insensitive: insensitive,
+      limit: limit,
+      skipIgnored: true,
+    ).{{filePath, lineNumber, matchedLines}}
+
+    matches.each { result =>
+      let msg = `${result.filePath}:${result.lineNumber}`
+      if (content) {
+        msg += result.matchedLines
+      }
+      print(msg)
+    }
+
+    if (matches.length == 0) {
+      return "No matches found."
+    }
+
+    print(`${matches.length} matches found`)
+
+    # files-only mode: just the paths, like `rg -l`
+    if (!content) {
+      return matches.map { _.filePath }.join("\n")
+    }
+
+    # group by file, header + indented `line:content`
+    let out = ""
+    let lastPath = ""
+    matches.each { m =>
+      if (m.filePath != lastPath) {
+        out += (if (lastPath == "") { "" } else { "\n" }) + m.filePath + "\n"
+        lastPath = m.filePath
+      }
+      out += "  " + toString(m.lineNumber) + ":" + m.matchedLines
+    }
+    let fileCount = matches.{{filePath}}.uniq.length
+    out + "\n" + toString(matches.length) + " matches in " + toString(fileCount) + " files"
+  }
+
+  # """
+  # Run a bash command in a container.
+  #
+  # NOTES:
+  # - Use `apk` to install packages.
+  # - Your initial working directory is always /work. Prepend `cd foo &&` to your command to change it.
+  # """
+  # bash(ws: Workspace!, cmd: String!): Doug! {
+  #   # wire the workspace into the sandbox
+  #   let before = sandbox
+  #     .withDirectory("/work", ws.directory("/"))
+  #     .withWorkdir("/work")
+  #
+  #   # run the command - note: we still keep the result of a nonzero exit
+  #   let after = before.withExec(["bash", "-c", cmd], expect: ReturnType.ANY)
+  #   if (after.exitCode != 0) {
+  #     print("exit code: " + toString(after.exitCode))
+  #   }
+  #
+  #   # see if the command changed anything
+  #   let diff = after
+  #     .directory("/work")
+  #     .changes(before.directory("/work"))
+  #   if (!diff.isEmpty) {
+  #     ws.apply(diff)
+  #   }
+  #
+  #   # save the result for future calls
+  #   self.sandbox = after
+  #   self
+  # }
+
+  # """
+  # Install a tool module into the current environment.
+  # """
+  # pub installModule(
+  #   moduleRef: String!,
+  # ): Env! {
+  #   currentEnv.withModule(moduleSource(moduleRef).asModule)
+  # }
+
+  # """
+  # Signal that you need a tool that doesn't exist yet. Call this whenever there isn't an obvious existing tool to accomplish the current task. This helps the system learn which capabilities are missing.
+  # """
+  # pub wantTool(
+  #   """
+  #   A short, camelCase name for the tool you wish you had (e.g. "runSQL", "deployPreview")
+  #   """
+  #   name: String!,
+  #   """
+  #   A concise description of what the tool would do
+  #   """
+  #   description: String!,
+  #   """
+  #   How you planned to use this tool to accomplish the current task
+  #   """
+  #   plannedUsage: String!,
+  # ): String! {
+  #   let msg = "🔧 Wanted tool: " + name + "\n"
+  #   msg += "   Description: " + description + "\n"
+  #   msg += "   Planned usage: " + plannedUsage
+  #   print(msg)
+  #   "Noted: tool '" + name + "' is not yet available. Try to accomplish the task using existing tools, or explain to the user what capability is missing."
+  # }
+
+  let reminderPrompt(workspace: Workspace!): String! {
+    let baseSegment = """
+    # System Reminder
+
+    - Do what has been asked; nothing more, nothing less.
+    - NEVER create files unless they're absolutely necessary for achieving your goal.
+    - ALWAYS prefer editing an existing file to creating a new one.
+    - NEVER proactively create documentation files (*.md) or README files.
+    - Only create documentation files if explicitly requested by the User.
+    """
+
+    let entries = workspace.directory("/", include: ["**/*.md"]).glob("*.md")
+    let contextFiles = ["DOUG.md", "AGENTS.md", "CLAUDE.md"]
+
+    # Look for context files
+    let contextSegment = ""
+    contextFiles.each { file =>
+      if (entries.contains(file)) {
+        let fileContents = workspace.file(file).contents
+        if (fileContents != "") {
+          contextSegment = """
+          # Project-Specific Context
+
+          Make sure to follow the instructions in the context below:
+
+          <project-context>
+          """ + fileContents + """
+          </project-context>
+
+          These instructions OVERRIDE any default behavior.
+          """
+        }
+        break
+      }
+    }
+
+    baseSegment + contextSegment
+  }
+
+  let normalize(path: String!): String! {
+    path.trimPrefix(workspacePath)
+  }
+}
+
+enum TODOStatus { PENDING IN_PROGRESS DONE }
+
+type TODO {
+  status: TODOStatus!
+  description: String!
+}
