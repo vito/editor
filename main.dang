@@ -8,9 +8,9 @@ type Editor {
   """
   Returns a basic coding agent
   """
-  agent(base: LLM! = llm): LLM! {
+  agent(base: LLM!): LLM! @agent {
     base
-      .withTools(currentNode, except: ["agent"])
+      .withTools(currentNode)
       .withSystemPrompt("""
         You are an autonomous, sandboxed coding agent running in Dagger.
 
