@@ -209,89 +209,115 @@ type Editor {
       .changes(base)
   }
 
-  # """
-  # Remove a file or directory.
-  # """
-  # pub rm(
-  #   source: Workspace!,
-  #   """
-  #   Relative path within the workspace
-  #   """
-  #   path: String!,
-  #   """
-  #   Force-remove the file - only used to resolve merge conflicts
-  #   """
-  #   force: Boolean! = false,
-  # ): Changeset! {
-  #   let normalizedPath = normalize(path)
-  #   let base = source
-  #     .directory(".", include: [normalizedPath])
-  #   let changes = base.withoutFile(path).changes(base)
-  #   source.stage(changes, force: force)
-  #   changes
-  # }
+  """
+  Run checks (tests, lints, etc.), optionally filtering by glob patterns (e.g. `test:*`, `go:*`).
+  """
+  check(workspace: Workspace!, include: [String!]! = []): Void {
+    let matched = workspace.checks(include)
+    if (matched.list.{{name}}.isEmpty) {
+      print("WARNING: no checks matched. Available checks:")
+      listChecks(workspace)
+    } else {
+      print(matched.run.report.contents)
+    }
+  }
 
-  # """
-  # Rename or move a file or directory. Parent directories are created automatically.
-  # """
-  # pub mv(
-  #   source: Workspace!,
-  #   """
-  #   Relative path within the workspace of the file or directory to move
-  #   """
-  #   oldPath: String!,
-  #   """
-  #   Destination path within the workspace
-  #   """
-  #   newPath: String!,
-  #   """
-  #   Force-move the file - only used to resolve merge conflicts
-  #   """
-  #   force: Boolean! = false,
-  # ): Changeset {
-  #   let normalizedPath = normalize(oldPath)
-  #   let base = source
-  #     .directory(".", include: [normalizedPath])
-  #   let changes = if (base.exists(oldPath, expectedType: ExistsType.REGULAR_TYPE)) {
-  #     base
-  #       .withFile(newPath, source.file(oldPath))
-  #       .withoutFile(oldPath)
-  #       .changes(base)
-  #   } else if (base.exists(oldPath, expectedType: ExistsType.DIRECTORY_TYPE)) {
-  #     base
-  #       .withDirectory(newPath, source.directory(oldPath))
-  #       .withoutDirectory(oldPath)
-  #       .changes(base)
-  #   }
-  #   source.stage(changes)
-  #   changes
-  # }
-  # """
-  # Run checks (tests, lints, etc.), optionally filtering by glob patterns (e.g. `test:*`, `go:*`).
-  # """
-  # pub checks(workspace: Workspace!, include: [String!]! = []): Void {
-  #   let matched = currentEnv.withWorkspace(workspace).checks(include)
-  #   if (matched.list.{name}.isEmpty) {
-  #     print("WARNING: no checks matched. Available checks:")
-  #     listChecks
-  #   } else {
-  #     print(matched.run.report.contents)
-  #   }
-  # }
+  """
+  List available checks.
+  """
+  listChecks(workspace: Workspace!, include: [String!]! = []): Void {
+    workspace.checks(include).list.{{name, description}}.each { x =>
+      if (x.description != "") {
+        print(x.name + ": " + x.description)
+      } else {
+        print(x.name)
+      }
+    }
+    null
+  }
 
-  # """
-  # List available checks.
-  # """
-  # pub listChecks(include: [String!]! = []): Void {
-  #   currentEnv.checks(include).list.{name, description}.each { x =>
-  #     if (x.description != "") {
-  #       print(x.name + ": " + x.description)
-  #     } else {
-  #       print(x.name)
-  #     }
-  #   }
-  #   null
-  # }
+  """
+  Run generators and apply their changes, optionally filtering by glob patterns (e.g. `go:*`).
+  """
+  generate(workspace: Workspace!, include: [String!]! = []): Changeset {
+    let matched = workspace.generators(include)
+    if (matched.list.{{name}}.isEmpty) {
+      print("WARNING: no generators matched. Available generators:")
+      listGenerators(workspace)
+      null
+    } else {
+      matched.run.changes
+    }
+  }
+
+  """
+  List available generators.
+  """
+  listGenerators(workspace: Workspace!, include: [String!]! = []): Void {
+    workspace.generators(include).list.{{name, description}}.each { x =>
+      if (x.description != "") {
+        print(x.name + ": " + x.description)
+      } else {
+        print(x.name)
+      }
+    }
+    null
+  }
+
+  """
+  Remove a file or directory.
+  """
+  rm(
+    source: Workspace!,
+    """
+    Relative path within the workspace
+    """
+    path: String!,
+    """
+    Force-remove the file - only used to resolve merge conflicts
+    """
+    force: Boolean! = false,
+  ): Changeset! {
+    let normalizedPath = normalize(path)
+    let base = source.directory(".", include: [normalizedPath])
+    base.withoutFile(path).changes(base)
+  }
+
+  """
+  Rename or move a file or directory. Parent directories are created automatically.
+  """
+  mv(
+    source: Workspace!,
+    """
+    Relative path within the workspace of the file or directory to move
+    """
+    oldPath: String!,
+    """
+    Destination path within the workspace
+    """
+    newPath: String!,
+    """
+    Force-move the file - only used to resolve merge conflicts
+    """
+    force: Boolean! = false,
+  ): Changeset {
+    let normalizedPath = normalize(oldPath)
+    let base = source
+      .directory(".", include: [normalizedPath])
+    let changes = if (base.exists(oldPath, expectedType: ExistsType.REGULAR_TYPE)) {
+      base
+        .withFile(newPath, source.file(oldPath))
+        .withoutFile(oldPath)
+        .changes(base)
+    } else if (base.exists(oldPath, expectedType: ExistsType.DIRECTORY_TYPE)) {
+      base
+        .withDirectory(newPath, source.directory(oldPath))
+        .withoutDirectory(oldPath)
+        .changes(base)
+    }
+    changes
+  }
+
   # """
   # Commit staged changes. All prior EditFile, Write, Rm, and Mv changes are included. Returns the commit hash.
   # """
@@ -304,6 +330,8 @@ type Editor {
   # ): String! {
   #   source.commit(message)
   # }
+  null
+
   """
   Find paths by glob pattern. Use '**' to match across directories.
   """
