@@ -165,10 +165,8 @@ type Editor {
     Force-write the file - only used to resolve merge conflicts
     """
     force: Boolean! = false,
-  ): Changeset! {
-    let normalizedPath = normalize(filePath)
-    let base = source.directory(".", include: [normalizedPath])
-    base.withNewFile(normalize(filePath), contents).changes(base)
+  ): Workspace! {
+    source.withNewFile(normalize(filePath), contents)
   }
 
   """
