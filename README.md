@@ -30,7 +30,8 @@ sandboxed coding work.
 Install the module and run the agent with Dagger. For example:
 
 ```sh
-dagger call editor agent
+dagger install github.com/vito/editor
+dagger agent
 ```
 
 The agent operates against a `Workspace` and reports its progress to stdout.
