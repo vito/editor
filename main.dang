@@ -210,28 +210,27 @@ type Editor {
   """
   Run checks (tests, lints, etc.), optionally filtering by glob patterns (e.g. `test:*`, `go:*`).
   """
-  check(workspace: Workspace!, include: [String!]! = []): Void {
+  check(workspace: Workspace!, include: [String!]! = []): String! {
     let matched = workspace.checks(include)
     if (matched.list.{{name}}.isEmpty) {
       print("WARNING: no checks matched. Available checks:")
       listChecks(workspace)
     } else {
-      print(matched.run.report.contents)
+      matched.run.report.contents
     }
   }
 
   """
   List available checks.
   """
-  listChecks(workspace: Workspace!, include: [String!]! = []): Void {
-    workspace.checks(include).list.{{name, description}}.each { x =>
+  listChecks(workspace: Workspace!, include: [String!]! = []): String! {
+    workspace.checks(include).list.{{name, description}}.map { x =>
       if (x.description != "") {
-        print(x.name + ": " + x.description)
+        x.name + ": " + x.description
       } else {
-        print(x.name)
+        x.name
       }
-    }
-    null
+    }.join("\n")
   }
 
   """
@@ -251,15 +250,14 @@ type Editor {
   """
   List available generators.
   """
-  listGenerators(workspace: Workspace!, include: [String!]! = []): Void {
-    workspace.generators(include).list.{{name, description}}.each { x =>
+  listGenerators(workspace: Workspace!, include: [String!]! = []): String! {
+    workspace.generators(include).list.{{name, description}}.map { x =>
       if (x.description != "") {
-        print(x.name + ": " + x.description)
+        x.name + ": " + x.description
       } else {
-        print(x.name)
+        x.name
       }
-    }
-    null
+    }.join("\n")
   }
 
   """
