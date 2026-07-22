@@ -273,10 +273,8 @@ type Editor {
     Force-remove the file - only used to resolve merge conflicts
     """
     force: Boolean! = false,
-  ): Changeset! {
-    let normalizedPath = normalize(path)
-    let base = source.directory(".", include: [normalizedPath])
-    base.withoutFile(path).changes(base)
+  ): Workspace! {
+    source.withoutFile(normalize(path))
   }
 
   """
