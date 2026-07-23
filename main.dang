@@ -362,9 +362,9 @@ type Editor {
     """
     paths: [String!]! = [],
     """
-    Relative path globs within the workspace to limit the search
+    Relative path glob within the workspace to limit the search
     """
-    globs: [String!]! = [],
+    glob: String,
     """
     Allow the pattern to span multiple lines
     """
@@ -388,7 +388,7 @@ type Editor {
       pattern: regex,
       literal: literalText,
       paths: normalizedPaths,
-      globs: globs,
+      globs: if (glob != null) [glob] else [],
       multiline: multiline,
       dotall: multiline,
       filesOnly: !content,
