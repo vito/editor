@@ -395,19 +395,60 @@ type Editor {
     }
   }
 
-  # """
-  # Commit staged changes. All prior EditFile, Write, Rm, and Mv changes are included. Returns the commit hash.
-  # """
-  # commit(
-  #   source: Workspace!,
-  #   """
-  #   The commit message
-  #   """
-  #   message: String!,
-  # ): String! {
-  #   source.commit(message)
-  # }
-  null
+  """
+  Copy a file or directory. Parent directories are created automatically.
+
+  Refuses rather than destroys: copying a path onto itself, a directory into
+  its own subtree, or onto an existing destination directory is an error, as
+  is copying a source that does not exist.
+  """
+  cp(
+    source: Workspace!,
+    """
+    Relative path within the workspace of the file or directory to copy
+    """
+    sourcePath: String!,
+    """
+    Destination path within the workspace
+    """
+    destPath: String!,
+  ): Changeset! {
+    # Path normalizes on construction, so aliases like "x" vs "./x" vs "x/"
+    # collapse here (the same rule as mv).
+    let src = Path(normalize(sourcePath))
+    let dst = Path(normalize(destPath))
+    let srcPath = src.string
+    let dstPath = dst.string
+
+    if (src == dst) {
+      raise `cp: source and destination are the same path (${srcPath})`
+    }
+    if (src.contains(dst)) {
+      raise `cp: cannot copy ${srcPath} into its own subtree (${dstPath})`
+    }
+
+    # Diff against the whole tree rather than a base narrowed to the source —
+    # see mv for why a narrowed base turns the structural diff destructive.
+    let base = source.directory(".")
+
+    if (base.exists(srcPath, expectedType: ExistsType.REGULAR_TYPE)) {
+      if (base.exists(dstPath, expectedType: ExistsType.DIRECTORY_TYPE)) {
+        raise `cp: destination ${dstPath} is an existing directory; pass the full destination path`
+      }
+      base
+        .withFile(dstPath, base.file(srcPath))
+        .changes(base)
+    } else if (base.exists(srcPath, expectedType: ExistsType.DIRECTORY_TYPE)) {
+      if (base.exists(dstPath)) {
+        raise `cp: destination ${dstPath} already exists`
+      }
+      base
+        .withDirectory(dstPath, base.directory(srcPath))
+        .changes(base)
+    } else {
+      raise `cp: ${srcPath} does not exist`
+    }
+  }
 
   """
   Find paths by glob pattern. Use '**' to match across directories.
