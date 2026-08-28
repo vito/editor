@@ -250,14 +250,26 @@ type Editor {
 
   """
   Run checks (tests, lints, etc.), optionally filtering by glob patterns (e.g. `test:*`, `go:*`).
+
+  The results are the rendered trace of this call: a row per check, with the
+  failing ones' output. A failing check is not an error.
   """
-  check(workspace: Workspace!, include: [String!]! = []): String! {
+  check(workspace: Workspace!, include: [String!]! = []): Void {
     let matched = workspace.checks(include)
     if (matched.list.{{name}}.isEmpty) {
       print("WARNING: no checks matched. Available checks:")
-      listChecks(workspace)
+      print(listChecks(workspace))
+      null
     } else {
-      matched.run.report.contents
+      # `run` errors as soon as a check fails. Swallow it: what the model
+      # reads is this call's trace, where each failure is a ✘ row carrying the
+      # failing exec's output and exit code.
+      {
+        matched.run.list.{{name}}
+        null
+      } rescue {
+        e: Error => null
+      }
     }
   }
 
