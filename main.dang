@@ -67,8 +67,7 @@ type Editor {
   dropped.
   """
   reload(llm: LLM!): LLM! {
-    let current = llm.workspace.reloaded
-    current.agents.compose(base: llm.withWorkspace(current).withoutSystemPrompts)
+    llm.workspace.agents.compose(base: llm.withoutSystemPrompts)
   }
 
   let todos: [TODO!]! = []
