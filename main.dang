@@ -235,6 +235,9 @@ type Editor {
     """
     force: Boolean! = false,
   ): Changeset! {
+    if (oldText == "") {
+      raise "oldText cannot be empty"
+    }
     let normalizedPath = normalize(filePath)
     let base = source.directory(".", include: [normalizedPath])
     base
