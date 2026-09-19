@@ -41,9 +41,9 @@ type Editor {
   incompatible, the call fails and the session keeps its previous tools and
   state.
 
-  NOTE: this replaces the whole agent composition, so system prompts added
-  outside it (e.g. a one-off prompt supplied at session start) are dropped;
-  every module's own prompts and tools are rebuilt from the updated workspace.
+  Recomposition refreshes only the selected middleware's own prompts and tools,
+  preserving unrelated tools and state and system prompts added by the caller
+  or middleware outside that selection.
   """
   install(
     llm: LLM!,
@@ -54,7 +54,7 @@ type Editor {
     ref: String!,
   ): LLM! {
     let updated = llm.workspace.withModule(ref)
-    updated.agents.recompose(base: llm.withWorkspace(updated).withoutSystemPrompts)
+    updated.agents.recompose(base: llm.withWorkspace(updated))
   }
 
   """
@@ -68,11 +68,12 @@ type Editor {
   normally. If a module fails to load or its saved state is incompatible, the
   call fails and the session keeps its previous tools and state.
 
-  NOTE: as with install, system prompts added outside the agent composition are
-  dropped.
+  Recomposition refreshes only the selected middleware's own prompts and tools,
+  preserving unrelated tools and state and system prompts added by the caller
+  or middleware outside that selection.
   """
   reload(llm: LLM!): LLM! {
-    llm.workspace.agents.recompose(base: llm.withoutSystemPrompts)
+    llm.workspace.agents.recompose(base: llm)
   }
 
   let todos: [TODO!]! = []
