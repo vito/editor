@@ -35,12 +35,15 @@ type Editor {
 
   The module is added to the workspace config and the conversation is
   recomposed against the updated workspace, so the new tools show up in THIS
-  session — no restart, no lost context. If the module fails to load, the call
-  fails and the session carries on unchanged.
+  session — no restart, no lost context. Existing tool-state field values are
+  preserved automatically, taking precedence over updated defaults; new fields
+  initialize normally. If a module fails to load or its saved state is
+  incompatible, the call fails and the session keeps its previous tools and
+  state.
 
-  NOTE: this replaces the whole agent composition, so system prompts added
-  outside it (e.g. a one-off prompt supplied at session start) are dropped;
-  every module's own prompts and tools are rebuilt from the updated workspace.
+  Recomposition refreshes only the selected middleware's own prompts and tools,
+  preserving unrelated tools and state and system prompts added by the caller
+  or middleware outside that selection.
   """
   install(
     llm: LLM!,
@@ -51,7 +54,7 @@ type Editor {
     ref: String!,
   ): LLM! {
     let updated = llm.workspace.withModule(ref)
-    updated.agents.compose(base: llm.withWorkspace(updated).withoutSystemPrompts)
+    updated.agents.recompose(base: llm.withWorkspace(updated))
   }
 
   """
@@ -60,14 +63,17 @@ type Editor {
   Use this after editing a module that provides your tools (self-repair): the
   conversation is recomposed against the workspace as it stands now — pending
   edits included — so the edited tool takes effect immediately, with the
-  conversation intact. If the edited module fails to load, the call fails and
-  the session carries on with the previous toolset.
+  conversation intact. Existing tool-state field values are preserved
+  automatically, taking precedence over updated defaults; new fields initialize
+  normally. If a module fails to load or its saved state is incompatible, the
+  call fails and the session keeps its previous tools and state.
 
-  NOTE: as with install, system prompts added outside the agent composition are
-  dropped.
+  Recomposition refreshes only the selected middleware's own prompts and tools,
+  preserving unrelated tools and state and system prompts added by the caller
+  or middleware outside that selection.
   """
   reload(llm: LLM!): LLM! {
-    llm.workspace.agents.compose(base: llm.withoutSystemPrompts)
+    llm.workspace.agents.recompose(base: llm)
   }
 
   let todos: [TODO!]! = []
