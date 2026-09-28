@@ -25,7 +25,7 @@ type Editor {
         - NEVER proactively create documentation files (*.md) or README files
         - Always prefer editing an existing file to creating a new one
         - Do what has been asked; nothing more, nothing less
-        - Use multiple tool calls concurrently whenever possible
+        - Use multiple tool calls per turn whenever possible; calls in one turn take effect in the order written, and consecutive reads run concurrently. Every call runs even if an earlier one failed, so a call that must not run on a failed predecessor (push, publish, send) belongs in a later turn
       """)
       .withSystemPrompt(reminderPrompt(base.workspace))
   }
