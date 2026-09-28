@@ -53,4 +53,4 @@ The agent is configured to:
 - Prefer precise `edit` changes; use `write` only for new files or full rewrites.
 - Avoid creating documentation or README files unless explicitly requested.
 - Follow existing conventions in the files it edits.
-- Use multiple tool calls concurrently when possible.
+- Use multiple tool calls per turn when possible; calls in one turn take effect in the order written, and consecutive reads run concurrently.
