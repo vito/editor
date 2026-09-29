@@ -41,9 +41,9 @@ type Editor {
   incompatible, the call fails and the session keeps its previous tools and
   state.
 
-  Recomposition refreshes only the selected middleware's own prompts and tools,
+  Recomposition refreshes only the selected modules' own prompts and tools,
   preserving unrelated tools and state and system prompts added by the caller
-  or middleware outside that selection.
+  or by modules outside that selection.
   """
   install(
     llm: LLM!,
@@ -54,7 +54,7 @@ type Editor {
     ref: String!,
   ): LLM! {
     let updated = llm.workspace.withModule(ref)
-    updated.agents.recompose(base: llm.withWorkspace(updated))
+    llm.withWorkspace(updated).recompose(expertise: workspaceExpertise(updated))
   }
 
   """
@@ -68,12 +68,12 @@ type Editor {
   normally. If a module fails to load or its saved state is incompatible, the
   call fails and the session keeps its previous tools and state.
 
-  Recomposition refreshes only the selected middleware's own prompts and tools,
+  Recomposition refreshes only the selected modules' own prompts and tools,
   preserving unrelated tools and state and system prompts added by the caller
-  or middleware outside that selection.
+  or by modules outside that selection.
   """
   reload(llm: LLM!): LLM! {
-    llm.workspace.agents.recompose(base: llm)
+    llm.recompose(expertise: workspaceExpertise(llm.workspace))
   }
 
   let todos: [TODO!]! = []
@@ -257,54 +257,50 @@ type Editor {
   }
 
   """
-  Run checks (tests, lints, etc.), optionally filtering by glob patterns (e.g. `test:*`, `go:*`).
+  Run checks (tests, lints, etc.), optionally filtering by path patterns (e.g. `go`, `go/lint`, `**/test`). A path selects that path and everything under it.
 
   The results are the rendered trace of this call: a row per check, with the
   failing ones' output. A failing check is not an error.
   """
   check(workspace: Workspace!, include: [String!]! = []): Void {
-    let matched = workspace.checks(include)
-    if (matched.list.{{name}}.isEmpty) {
+    let matched = workspace.artifacts(include: include).filterTypes(["Check"])
+    if (matched.items.{{path}}.isEmpty) {
       print("WARNING: no checks matched. Available checks:")
       print(listChecks(workspace))
-      null
     } else {
-      # `run` errors as soon as a check fails. Swallow it: what the model
-      # reads is this call's trace, where each failure is a ✘ row carrying the
-      # failing exec's output and exit code.
-      {
-        matched.run.list.{{name}}
-        null
-      } rescue {
-        e: Error => null
-      }
+      # `values` runs every check and keeps each failure as data rather than
+      # raising it: what the model reads is this call's trace, where each
+      # failure is a ✘ row carrying the failing exec's output and exit code.
+      matched.values.{{id}}
     }
+    null
   }
 
   """
   List available checks.
   """
   listChecks(workspace: Workspace!, include: [String!]! = []): String! {
-    workspace.checks(include).list.{{name, description}}.map { x =>
-      if (x.description != "") {
-        x.name + ": " + x.description
-      } else {
-        x.name
-      }
-    }.join("\n")
+    listArtifacts(workspace.artifacts(include: include).filterTypes(["Check"]))
   }
 
   """
-  Run generators and apply their changes, optionally filtering by glob patterns (e.g. `go:*`).
+  Run generators and apply their changes, optionally filtering by path patterns (e.g. `go`, `go/generate`, `**/sdk`). A path selects that path and everything under it.
   """
   generate(workspace: Workspace!, include: [String!]! = []): Changeset {
-    let matched = workspace.generators(include)
-    if (matched.list.{{name}}.isEmpty) {
+    let generators = workspace
+      .artifacts(include: include)
+      .filterTypes(["Generator"])
+      .asGenerators
+      .{{id}}
+    if (generators.isEmpty) {
       print("WARNING: no generators matched. Available generators:")
-      listGenerators(workspace)
+      print(listGenerators(workspace))
       null
     } else {
-      matched.run.changes
+      changeset.withChangesets(
+        generators.map { node(id: _.id).{{... on Generator!}}.changeset },
+        onConflict: ChangesetsMergeConflict.FAIL_EARLY,
+      )
     }
   }
 
@@ -312,13 +308,7 @@ type Editor {
   List available generators.
   """
   listGenerators(workspace: Workspace!, include: [String!]! = []): String! {
-    workspace.generators(include).list.{{name, description}}.map { x =>
-      if (x.description != "") {
-        x.name + ": " + x.description
-      } else {
-        x.name
-      }
-    }.join("\n")
+    listArtifacts(workspace.artifacts(include: include).filterTypes(["Generator"]))
   }
 
   """
@@ -668,6 +658,25 @@ type Editor {
 
   let normalize(path: String!): String! {
     path.trimPrefix(workspacePath)
+  }
+
+  let workspaceExpertise(workspace: Workspace!): [Expertise!]! {
+    workspace.artifacts.filterTypes(["Expertise"]).asExpertise.{{id}}.map {
+      node(id: _.id).{{... on Expertise!}}
+    }
+  }
+
+  # Checks and generators are listed by their path in the workspace (the DAG
+  # address without its dag:// scheme), which is also what `include` matches.
+  let listArtifacts(artifacts: Artifacts!): String! {
+    artifacts.pathDefinitions.{{uri, description}}.map { x =>
+      let name = x.uri.trimPrefix("dag://")
+      if (x.description != "") {
+        name + ": " + x.description
+      } else {
+        name
+      }
+    }.join("\n")
   }
 }
 
