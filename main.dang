@@ -257,16 +257,25 @@ type Editor {
   }
 
   """
-  Run checks (tests, lints, etc.), optionally filtering by path patterns (e.g. `go`, `go/lint`, `**/test`). A path selects that path and everything under it.
+  Run checks (tests, lints, etc.) selected by DAG address: "**" runs every
+  check, "go/**" every check under go, "go/lint" just that one, and
+  "go/test?go-test=TestFoo" one item of a check collection. Only the checks in
+  the selection run, so "go/**" may also select artifacts that are not checks;
+  "dag+check://go/**" selects only the checks. Use FindArtifacts (e.g. with
+  type "Check") to see which checks exist and their addresses.
 
   The results are the rendered trace of this call: a row per check, with the
   failing ones' output. A failing check is not an error.
   """
-  check(workspace: Workspace!, include: [String!]! = []): Void {
-    let matched = workspace.artifacts(include: include).filterTypes(["Check"])
+  check(
+    """
+    The checks to run, e.g. "**", "go/**", "dag+check://go/**" or "go/lint".
+    """
+    targets: Artifacts!,
+  ): Void {
+    let matched = targets.filterTypes(["Check"])
     if (matched.items.{{path}}.isEmpty) {
-      print("WARNING: no checks matched. Available checks:")
-      print(listChecks(workspace))
+      print(noneOfType(targets, "check", "Check"))
     } else {
       # `values` runs every check and keeps each failure as data rather than
       # raising it: what the model reads is this call's trace, where each
@@ -277,24 +286,28 @@ type Editor {
   }
 
   """
-  List available checks.
-  """
-  listChecks(workspace: Workspace!, include: [String!]! = []): String! {
-    listArtifacts(workspace.artifacts(include: include).filterTypes(["Check"]))
-  }
+  Run generators selected by DAG address and apply their changes: "**" runs
+  every generator, "sdk/**" every generator under sdk, "go/generate" just that
+  one. Only the generators in the selection run, so "sdk/**" may also select
+  artifacts that are not generators; "dag+generator://sdk/**" selects only the
+  generators. Use FindArtifacts (e.g. with type "Generator") to see which
+  generators exist and their addresses.
 
+  The changes of every selected generator are merged into one changeset; two
+  generators changing the same file fail the call.
   """
-  Run generators and apply their changes, optionally filtering by path patterns (e.g. `go`, `go/generate`, `**/sdk`). A path selects that path and everything under it.
-  """
-  generate(workspace: Workspace!, include: [String!]! = []): Changeset {
-    let generators = workspace
-      .artifacts(include: include)
+  generate(
+    """
+    The generators to run, e.g. "**", "sdk/**", "dag+generator://sdk/**" or "go/generate".
+    """
+    targets: Artifacts!,
+  ): Changeset {
+    let generators = targets
       .filterTypes(["Generator"])
       .asGenerators
       .{{id}}
     if (generators.isEmpty) {
-      print("WARNING: no generators matched. Available generators:")
-      print(listGenerators(workspace))
+      print(noneOfType(targets, "generator", "Generator"))
       null
     } else {
       changeset.withChangesets(
@@ -302,13 +315,6 @@ type Editor {
         onConflict: ChangesetsMergeConflict.FAIL_EARLY,
       )
     }
-  }
-
-  """
-  List available generators.
-  """
-  listGenerators(workspace: Workspace!, include: [String!]! = []): String! {
-    listArtifacts(workspace.artifacts(include: include).filterTypes(["Generator"]))
   }
 
   """
@@ -666,17 +672,11 @@ type Editor {
     }
   }
 
-  # Checks and generators are listed by their path in the workspace (the DAG
-  # address without its dag:// scheme), which is also what `include` matches.
-  let listArtifacts(artifacts: Artifacts!): String! {
-    artifacts.pathDefinitions.{{uri, description}}.map { x =>
-      let name = x.uri.trimPrefix("dag://")
-      if (x.description != "") {
-        name + ": " + x.description
-      } else {
-        name
-      }
-    }.join("\n")
+  # The warning for a selection with no artifact of the type a tool runs, e.g.
+  # "go/**" passed to check when go has generators but no checks. It points
+  # the model at the ways to address the right ones instead of listing them.
+  let noneOfType(targets: Artifacts!, cliType: String!, typeName: String!): String! {
+    `WARNING: ${targets.uri} selects no ${cliType}s. Use FindArtifacts with type "${typeName}" to list them, or select only ${cliType}s with an address like "dag+${cliType}://**".`
   }
 }
 
