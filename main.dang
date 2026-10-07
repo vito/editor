@@ -63,17 +63,20 @@ type Editor {
   Use this after editing a module that provides your tools (self-repair): the
   conversation is recomposed against the workspace as it stands now — pending
   edits included — so the edited tool takes effect immediately, with the
-  conversation intact. Existing tool-state field values are preserved
-  automatically, taking precedence over updated defaults; new fields initialize
-  normally. If a module fails to load or its saved state is incompatible, the
-  call fails and the session keeps its previous tools and state.
+  conversation intact. The user-level Dagger config is re-read too, so settings
+  edited since the session started apply. Existing tool-state field values are
+  preserved automatically, taking precedence over updated defaults; new fields
+  initialize normally. If a module fails to load or its saved state is
+  incompatible, the call fails and the session keeps its previous tools and
+  state.
 
   Recomposition refreshes only the selected modules' own prompts and tools,
   preserving unrelated tools and state and system prompts added by the caller
   or by modules outside that selection.
   """
   reload(llm: LLM!): LLM! {
-    llm.recompose(expertise: workspaceExpertise(llm.workspace))
+    let refreshed = llm.workspace.withUserConfig
+    llm.withWorkspace(refreshed).recompose(expertise: workspaceExpertise(refreshed))
   }
 
   let todos: [TODO!]! = []
