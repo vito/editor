@@ -247,13 +247,15 @@ type Editor {
     if (oldText == "") {
       raise "oldText cannot be empty"
     }
-    let normalizedPath = normalize(filePath)
-    let base = source.directory(".", include: [normalizedPath])
+    # Read and write the same cwd-relative path: the base, and so the
+    # changeset, is measured from the cwd.
+    let rel = cwdPath("edit", source, filePath)
+    let base = source.directory(".", include: [rel])
     base
       .withFile(
-        normalizedPath,
+        rel,
         source
-          .file(normalizedPath)
+          .file(rel)
           .withReplaced(oldText, newText, all: replaceAll),
       )
       .changes(base)
@@ -361,8 +363,8 @@ type Editor {
   ): Changeset! {
     # Path normalizes on construction, so the aliases that used to slip past an
     # equality check on the raw strings ("x" vs "./x" vs "x/") collapse here.
-    let src = Path(normalize(oldPath))
-    let dst = Path(normalize(newPath))
+    let src = Path(cwdPath("mv", source, oldPath))
+    let dst = Path(cwdPath("mv", source, newPath))
     let srcPath = src.string
     let dstPath = dst.string
 
@@ -422,8 +424,8 @@ type Editor {
   ): Changeset! {
     # Path normalizes on construction, so aliases like "x" vs "./x" vs "x/"
     # collapse here (the same rule as mv).
-    let src = Path(normalize(sourcePath))
-    let dst = Path(normalize(destPath))
+    let src = Path(cwdPath("cp", source, sourcePath))
+    let dst = Path(cwdPath("cp", source, destPath))
     let srcPath = src.string
     let dstPath = dst.string
 
@@ -667,6 +669,25 @@ type Editor {
 
   let normalize(path: String!): String! {
     path.trimPrefix(workspacePath)
+  }
+
+  # cwdPath resolves a path the model passed to one relative to the
+  # workspace's cwd, the frame source.directory(".") and so a tool's Changeset
+  # are measured from. After normalize, a leading "/" is relative to the
+  # workspace root and anything else to the cwd. A path outside the cwd is an
+  # error: a cwd-relative changeset can't express it.
+  let cwdPath(tool: String!, source: Workspace!, path: String!): String! {
+    let p = normalize(path)
+    let cwd = Path("/").join(Path(source.cwd))
+    let abs = if (p.hasPrefix("/")) {
+      Path(p)
+    } else {
+      cwd.join(Path(p))
+    }
+    if (!cwd.contains(abs)) {
+      raise `${tool}: ${path} is outside the current directory ${cwd.string}`
+    }
+    abs.relativeTo(cwd).string ?? "."
   }
 
   let workspaceExpertise(workspace: Workspace!): [Expertise!]! {
