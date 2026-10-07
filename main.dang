@@ -247,13 +247,15 @@ type Editor {
     if (oldText == "") {
       raise "oldText cannot be empty"
     }
-    let normalizedPath = normalize(filePath)
-    let base = source.directory(".", include: [normalizedPath])
+    # Measure the changeset from the workspace root (see rootPath), reading
+    # and writing the same root-relative path.
+    let rel = rootPath(source, filePath)
+    let base = source.directory("/", include: [rel])
     base
       .withFile(
-        normalizedPath,
+        rel,
         source
-          .file(normalizedPath)
+          .file("/" + rel)
           .withReplaced(oldText, newText, all: replaceAll),
       )
       .changes(base)
@@ -361,8 +363,8 @@ type Editor {
   ): Changeset! {
     # Path normalizes on construction, so the aliases that used to slip past an
     # equality check on the raw strings ("x" vs "./x" vs "x/") collapse here.
-    let src = Path(normalize(oldPath))
-    let dst = Path(normalize(newPath))
+    let src = Path(rootPath(source, oldPath))
+    let dst = Path(rootPath(source, newPath))
     let srcPath = src.string
     let dstPath = dst.string
 
@@ -378,8 +380,9 @@ type Editor {
     # Diff against the whole tree rather than a base narrowed to the source.
     # A narrowed base omits the source's siblings, so its parent directory
     # looks emptied by the move, and applying that structural diff deletes
-    # every sibling the base left out.
-    let base = source.directory(".")
+    # every sibling the base left out. The base is the workspace root, so the
+    # changeset is measured from the root, like every tool's.
+    let base = source.directory("/")
 
     if (base.exists(srcPath, expectedType: ExistsType.REGULAR_TYPE)) {
       if (base.exists(dstPath, expectedType: ExistsType.DIRECTORY_TYPE)) {
@@ -422,8 +425,8 @@ type Editor {
   ): Changeset! {
     # Path normalizes on construction, so aliases like "x" vs "./x" vs "x/"
     # collapse here (the same rule as mv).
-    let src = Path(normalize(sourcePath))
-    let dst = Path(normalize(destPath))
+    let src = Path(rootPath(source, sourcePath))
+    let dst = Path(rootPath(source, destPath))
     let srcPath = src.string
     let dstPath = dst.string
 
@@ -436,7 +439,7 @@ type Editor {
 
     # Diff against the whole tree rather than a base narrowed to the source —
     # see mv for why a narrowed base turns the structural diff destructive.
-    let base = source.directory(".")
+    let base = source.directory("/")
 
     if (base.exists(srcPath, expectedType: ExistsType.REGULAR_TYPE)) {
       if (base.exists(dstPath, expectedType: ExistsType.DIRECTORY_TYPE)) {
@@ -667,6 +670,20 @@ type Editor {
 
   let normalize(path: String!): String! {
     path.trimPrefix(workspacePath)
+  }
+
+  # rootPath resolves a path the model passed to one relative to the
+  # workspace root, the frame a tool's Changeset is measured from. After
+  # normalize, a leading "/" is relative to the root and anything else to the
+  # workspace's cwd ("/" at the root). The root itself comes out as ".".
+  let rootPath(source: Workspace!, path: String!): String! {
+    let p = normalize(path)
+    let abs = if (p.hasPrefix("/")) {
+      Path(p)
+    } else {
+      Path("/").join(Path(source.cwd)).join(Path(p))
+    }
+    abs.relativeTo("/").string ?? "."
   }
 
   let workspaceExpertise(workspace: Workspace!): [Expertise!]! {
