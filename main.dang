@@ -41,9 +41,11 @@ type Editor {
   incompatible, the call fails and the session keeps its previous tools and
   state.
 
-  Recomposition refreshes only the selected modules' own prompts and tools,
-  preserving unrelated tools and state and system prompts added by the caller
-  or by modules outside that selection.
+  Install is the explicit way to add a module's capabilities to this
+  conversation, even if only a narrower tool object from it was bound before.
+  Other modules are refreshed only when their Expertise is visible in the
+  conversation's artifact scope. Recomposition replaces those modules' own
+  prompts and tools, preserving unrelated tools, state, and caller prompts.
   """
   install(
     llm: LLM!,
@@ -54,7 +56,9 @@ type Editor {
     ref: String!,
   ): LLM! {
     let updated = llm.workspace.withModule(ref)
-    llm.withWorkspace(updated).recompose(expertise: workspaceExpertise(updated))
+    llm.withWorkspace(updated).recompose(
+      expertise: participatingExpertise(llm, updated, force: installedNames(llm.workspace, updated, ref)),
+    )
   }
 
   """
@@ -70,13 +74,16 @@ type Editor {
   incompatible, the call fails and the session keeps its previous tools and
   state.
 
-  Recomposition refreshes only the selected modules' own prompts and tools,
-  preserving unrelated tools and state and system prompts added by the caller
-  or by modules outside that selection.
+  Reload refreshes only modules taking part in this conversation: those whose
+  Expertise is visible in its artifact scope. A module bound only through a
+  narrower tool object is left alone; use install to add its full capabilities.
+  Newly configured modules with no bound tools are still picked up. Selected
+  modules' own prompts and tools are replaced, preserving unrelated tools,
+  state, and caller prompts.
   """
   reload(llm: LLM!): LLM! {
     let refreshed = llm.workspace.withUserConfig
-    llm.withWorkspace(refreshed).recompose(expertise: workspaceExpertise(refreshed))
+    llm.withWorkspace(refreshed).recompose(expertise: participatingExpertise(llm, refreshed))
   }
 
   let todos: [TODO!]! = []
@@ -690,10 +697,39 @@ type Editor {
     abs.relativeTo(cwd).string ?? "."
   }
 
-  let workspaceExpertise(workspace: Workspace!): [Expertise!]! {
-    workspace.artifacts.filterTypes(["Expertise"]).asExpertise.{{id}}.map {
-      node(id: _.id).{{... on Expertise!}}
+  # Bound tools shadow same-named workspace modules. A main object exposes
+  # its Expertise; a narrower object does not. Use that scope only for names:
+  # the refreshed workspace supplies the implementation, so self-repair works.
+  let participatingExpertise(llm: LLM!, ws: Workspace!, force: [String!]! = []): [Expertise!]! {
+    let names = llm.withWorkspace(ws).artifacts.filterTypes(["Expertise"])
+      .items.{{moduleName}}.map { a => a.moduleName }.uniq + force
+    let selection = ws.artifacts.filterTypes(["Expertise"])
+    selection.items.{{moduleName}}.map { a => a.moduleName }.uniq.each { name =>
+      if (!names.contains(name)) {
+        selection = selection.withoutUri(uri: "dag://" + name + "/**")
+      }
     }
+    selection.asExpertise.{{id}}.map { node(id: _.id).{{... on Expertise!}} }
+  }
+
+  # New config entries identify an install without fetching the source again.
+  # A reinstall changes no names: match the configured name/source first, then
+  # resolve local paths against the workspace and remote refs through Dagger.
+  let installedNames(before: Workspace!, after: Workspace!, ref: String!): [String!]! {
+    let previous = before.modules.{{name}}.map { m => m.name }
+    let configured = after.modules.{{name, source}}
+    let added = configured.map { m => m.name }.filter { name => !previous.contains(name) }
+    if (!added.isEmpty) {
+      return added
+    }
+    let matched = configured.filter { m => m.name == ref or m.source == ref }.map { m => m.name }
+    if (!matched.isEmpty) {
+      return matched
+    }
+    let name = after.moduleSource(path: ref).moduleName rescue { e: Error =>
+      moduleSource(refString: ref).moduleName rescue { e: Error => "" }
+    }
+    if (name == "") { [] } else { [name] }
   }
 
   # The warning for a selection with no artifact of the type a tool runs, e.g.
