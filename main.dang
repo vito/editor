@@ -74,13 +74,13 @@ type Editor {
   Use this after editing a module that provides your tools (self-repair): each
   expertise entry this conversation was composed from is found again by its
   address in the workspace as it stands now — pending edits included — and run
-  again, so the edited tool takes effect immediately, with the conversation
-  intact. The user-level Dagger config is re-read too, so settings edited since
-  the session started apply. Existing tool-state field values are preserved
-  automatically, taking precedence over updated defaults; new fields
-  initialize normally. If a module fails to load or its saved state is
-  incompatible, the call fails and the session keeps its previous tools and
-  state.
+  again in the same order, so the edited tool takes effect immediately, with
+  the conversation intact. The user-level Dagger config is re-read too, so
+  settings edited since the session started apply. Existing tool-state field
+  values are preserved automatically, taking precedence over updated defaults;
+  new fields initialize normally. If a module fails to load or its saved state
+  is incompatible, the call fails with that error and the session keeps its
+  previous tools and state.
 
   Reload only refreshes what is already composed; it never adds expertise,
   even from newly configured modules (use install for that). An entry the
@@ -89,13 +89,23 @@ type Editor {
   expertise are left alone.
   """
   reload(llm: LLM!): LLM! {
-    # The engine treats an empty record as a no-op; fail instead and say why,
-    # and don't fall back to recomposing all workspace expertise: that turned
-    # staff workers into chiefs (vito/agents#20).
-    if (llm.expertise.{{id}}.isEmpty) {
-      raise "reload: this conversation has no composition record, so there is nothing to reload. Either it predates the engine recording the expertise a conversation is composed from, or it wasn't composed from expertise at all. Respawn the agent to get a conversation that can reload."
+    let recorded = llm.expertise.{{id, artifact.{{uri}}}}
+    # Composing an empty list is a no-op; fail instead and say why, and don't
+    # fall back to composing all workspace expertise: that turned staff
+    # workers into chiefs (vito/agents#20).
+    if (recorded.isEmpty) {
+      raise "reload: this conversation wasn't composed from any expertise (or predates the engine recording it), so there is nothing to reload. Use install to add a module's expertise."
     }
-    llm.withWorkspace(llm.workspace.withUserConfig).recompose
+    let ws = llm.workspace.withUserConfig
+    # Each entry the workspace addresses runs the workspace's version; a broken
+    # module's load error is kept by filterUri and raised by asExpertise. An
+    # entry the workspace doesn't address runs as recorded.
+    let entries: [Expertise!]! = recorded.map { e =>
+      let found = ws.artifacts.filterUri(uri: e.artifact.uri).asExpertise.{{id}}
+      node(id: found[0].id ?? e.id).{{... on Expertise!}}
+    }
+    # Entries already recorded are refreshed in place.
+    llm.withWorkspace(ws).compose(expertise: entries)
   }
 
   let todos: [TODO!]! = []
