@@ -35,23 +35,19 @@ type Editor {
 
   The module is added to the workspace config and its default expertise (the
   functions it marks @agent) is composed into THIS conversation — no restart,
-  no lost context. The expertise this conversation was already composed from
-  is refreshed against the updated workspace too, and nothing else is added:
-  other modules in the workspace stay out of the conversation. Existing
-  tool-state field values are preserved automatically, taking precedence over
-  updated defaults; new fields initialize normally. If a module fails to load
-  or its saved state is incompatible, the call fails and the session keeps its
-  previous tools and state.
+  no lost context. Nothing else is added or refreshed: other modules in the
+  workspace stay out of the conversation, and the rest of the expertise it was
+  already composed from is left as it is. Existing tool-state field values are
+  preserved automatically, taking precedence over updated defaults; new fields
+  initialize normally. If a module fails to load or its saved state is
+  incompatible, the call fails and the session keeps its previous tools and
+  state.
 
   Installing a module that is already configured composes its default
   expertise too, refreshing whatever of it is already composed.
-
-  Only a running agent can install: under dagger mcp or a synchronous LLM loop
-  there is no agent to compose for, so this tool fails there.
   """
   install(
     llm: LLM!,
-    me: Agent!,
     """
     Module reference to install, e.g. a local path like ./modules/review or a
     remote address like github.com/dagger/dagger/modules/foo.
@@ -63,20 +59,13 @@ type Editor {
     installedNames(llm.workspace, ws, ref).each { name =>
       defaults += defaultExpertise(ws, name)
     }
+    let base = llm.withWorkspace(ws)
     if (defaults.isEmpty) {
       print(`WARNING: ${ref} has no default expertise (no @agent functions), so none of its tools were composed. Its artifacts are still addressable.`)
-    }
-    # Refresh the record against the updated workspace first; recompose
-    # refuses an empty record, so a conversation without one starts as is.
-    let base = llm.withWorkspace(ws)
-    if (!llm.expertise.{{id}}.isEmpty) {
-      base = me.recompose(conversation: base)
-    }
-    if (defaults.isEmpty) {
       return base
     }
     # Entries already recorded are refreshed in place, others appended.
-    me.compose(conversation: base, expertise: defaults)
+    base.compose(expertise: defaults)
   }
 
   """
@@ -98,18 +87,15 @@ type Editor {
   workspace no longer has, e.g. after checking out another repository, is run
   again from where it was recorded. Tools and prompts added outside any
   expertise are left alone.
-
-  Only a running agent can reload: under dagger mcp or a synchronous LLM loop
-  there is no agent to recompose for, so this tool fails there.
   """
-  reload(llm: LLM!, me: Agent!): LLM! {
-    # The engine refuses an empty record too; say why, and don't fall back to
-    # recomposing all workspace expertise: that turned staff workers into
-    # chiefs (vito/agents#20).
+  reload(llm: LLM!): LLM! {
+    # The engine treats an empty record as a no-op; fail instead and say why,
+    # and don't fall back to recomposing all workspace expertise: that turned
+    # staff workers into chiefs (vito/agents#20).
     if (llm.expertise.{{id}}.isEmpty) {
       raise "reload: this conversation has no composition record, so there is nothing to reload. Either it predates the engine recording the expertise a conversation is composed from, or it wasn't composed from expertise at all. Respawn the agent to get a conversation that can reload."
     }
-    me.recompose(conversation: llm.withWorkspace(llm.workspace.withUserConfig))
+    llm.withWorkspace(llm.workspace.withUserConfig).recompose
   }
 
   let todos: [TODO!]! = []
