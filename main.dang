@@ -43,9 +43,8 @@ type Editor {
   or its saved state is incompatible, the call fails and the session keeps its
   previous tools and state.
 
-  Installing a module that is already configured composes whichever of its
-  default expertise isn't composed yet. To add a function that isn't default
-  expertise, use compose.
+  Installing a module that is already configured composes its default
+  expertise too, refreshing whatever of it is already composed.
   """
   install(
     llm: LLM!,
@@ -56,38 +55,16 @@ type Editor {
     ref: String!,
   ): LLM! {
     let ws = llm.workspace.withModule(ref)
-    let recorded = recordedExpertise(llm)
-
-    # New config entries name the install without fetching its source again.
-    let before = llm.workspace.modules.{{name}}.map { m => m.name }
-    let configured = ws.modules.{{name, source}}
-    let added = configured.map { m => m.name }.filter { name => !before.contains(name) }
-
     let defaults: [Expertise!]! = []
-    if (!added.isEmpty) {
-      added.each { name =>
-        defaults += defaultExpertise(ws, name)
-      }
-      if (defaults.isEmpty) {
-        print(`WARNING: ${added.join(", ")} has no default expertise, so none of its tools were composed. Use compose with the DAG address of one of its functions to add it.`)
-      }
-    } else {
-      # A reinstall adds no config entry: find the configured module it names
-      # and add the default expertise this conversation doesn't have yet.
-      let matched = configured.filter { m => m.name == ref or m.source == ref }
-      if (matched.isEmpty) {
-        raise `install: ${ref} added no module and matches no configured module name or source. To add expertise by its DAG address, use compose(address), e.g. compose("dag://staff/agent").`
-      }
-      let composed = recorded.map { e => e.artifact.uri }
-      matched.each { m =>
-        defaults += defaultExpertise(ws, m.name).filter { e => !composed.contains(e.artifact.uri) }
-      }
-      if (defaults.isEmpty) {
-        raise `install: ${ref} is already installed and all of its default expertise is composed. Use reload to refresh it, or compose(address) to add one of its other functions by DAG address.`
-      }
+    installedNames(llm.workspace, ws, ref).each { name =>
+      defaults += defaultExpertise(ws, name)
     }
-
-    llm.withWorkspace(ws).recompose(expertise: refreshed(recorded, ws) + defaults)
+    if (defaults.isEmpty) {
+      print(`WARNING: ${ref} has no default expertise (no @agent functions), so none of its tools were composed. Its artifacts are still addressable.`)
+    }
+    # Recompose refreshes every recorded entry as well, so only the installed
+    # module's entries need passing; those already recorded refresh in place.
+    llm.withWorkspace(ws).recompose(expertise: defaults)
   }
 
   """
@@ -105,53 +82,19 @@ type Editor {
   state.
 
   Reload only refreshes what is already composed; it never adds expertise,
-  even from newly configured modules (use install or compose for that). An
-  entry the workspace no longer has, e.g. after checking out another
-  repository, is run again from where it was recorded. Tools and prompts added
-  outside any expertise are left alone.
+  even from newly configured modules (use install for that). An entry the
+  workspace no longer has, e.g. after checking out another repository, is run
+  again from where it was recorded. Tools and prompts added outside any
+  expertise are left alone.
   """
   reload(llm: LLM!): LLM! {
-    let recorded = recordedExpertise(llm)
-    if (recorded.isEmpty) {
+    # An empty record would make recompose a silent no-op. Recomposing all
+    # workspace expertise instead is what turned staff workers into chiefs
+    # (vito/agents#20), so say why rather than guess.
+    if (llm.expertise.{{id}}.isEmpty) {
       raise "reload: this conversation has no composition record, so there is nothing to reload. Either it predates the engine recording the expertise a conversation is composed from, or it wasn't composed from expertise at all. Respawn the agent to get a conversation that can reload."
     }
-    let ws = llm.workspace.withUserConfig
-    llm.withWorkspace(ws).recompose(expertise: refreshed(recorded, ws))
-  }
-
-  """
-  Compose expertise selected by DAG address into this conversation and
-  continue with its tools available immediately, e.g. "dag://staff/agent" to
-  make a staff worker a chief.
-
-  Any function that takes the conversation and returns it can be composed, not
-  only a module's default expertise. The expertise already composed is
-  refreshed alongside it, preserving compatible tool state, and later reloads
-  refresh the new entry too. Use FindArtifacts (e.g. with type "Expertise" or
-  "LLM") to see what exists. If an entry fails to load or its saved state is
-  incompatible, the call fails and the session keeps its previous tools and
-  state.
-  """
-  compose(
-    llm: LLM!,
-    """
-    DAG address of the expertise to compose, e.g. "dag://staff/agent".
-    """
-    address: String!,
-  ): LLM! {
-    let selected = expertiseIn(llm.workspace.artifacts.filterUri(uri: address)) rescue {
-      e: Error => raise `compose: ${address} is not composable: ${e.message}`
-    }
-    if (selected.isEmpty) {
-      raise `compose: ${address} selects nothing composable. Use FindArtifacts with type "Expertise" or "LLM" to list what can be composed.`
-    }
-    let recorded = recordedExpertise(llm)
-    let composed = recorded.map { e => e.artifact.uri }
-    let added = selected.filter { e => !composed.contains(e.artifact.uri) }
-    if (added.isEmpty) {
-      raise `compose: ${address} is already composed. Use reload to refresh it.`
-    }
-    llm.recompose(expertise: refreshed(recorded, llm.workspace) + added)
+    llm.withWorkspace(llm.workspace.withUserConfig).recompose
   }
 
   let todos: [TODO!]! = []
@@ -765,39 +708,32 @@ type Editor {
     abs.relativeTo(cwd).string ?? "."
   }
 
-  # The expertise this conversation was composed from, in order. Recompose
-  # replaces only these entries' contributions, so selecting from this record
-  # rather than from the whole workspace keeps a staff worker from picking up
-  # the chief (vito/agents#20).
-  let recordedExpertise(llm: LLM!): [Expertise!]! {
-    llm.expertise.{{id}}.map { node(id: _.id).{{... on Expertise!}} }
-  }
-
-  # Each recorded entry found again by its artifact URI in ws, so an edited
-  # module runs its new code. An entry ws can't address, e.g. after checking
-  # out another repository, is kept as recorded and runs from its own source.
-  let refreshed(recorded: [Expertise!]!, ws: Workspace!): [Expertise!]! {
-    let entries: [Expertise!]! = []
-    recorded.each { e =>
-      let found = expertiseIn(ws.artifacts.filterUri(uri: e.artifact.uri))
-      if (found.isEmpty) {
-        entries += [e]
-      } else {
-        entries += found
-      }
+  # The configured names of the modules an install of ref refers to. New config
+  # entries name the install without fetching its source again; a reinstall
+  # adds none, so match the configured module by name or source instead.
+  let installedNames(before: Workspace!, after: Workspace!, ref: String!): [String!]! {
+    let previous = before.modules.{{name}}.map { m => m.name }
+    let configured = after.modules.{{name, source}}
+    let added = configured.map { m => m.name }.filter { name => !previous.contains(name) }
+    if (!added.isEmpty) {
+      return added
     }
-    entries
+    let matched = configured.filter { m => m.name == ref or m.source == ref }.map { m => m.name }
+    if (matched.isEmpty) {
+      raise `install: ${ref} added no module to the workspace config and matches no configured module's name or source`
+    }
+    matched
   }
 
-  # The functions a module marks @agent: what install composes by default.
-  # A bare module address selects only the module object itself, so match its
-  # whole tree.
+  # The functions a module marks @agent: what install composes. A bare module
+  # address selects only the module object itself, so match its whole tree.
   let defaultExpertise(ws: Workspace!, name: String!): [Expertise!]! {
-    expertiseIn(ws.artifacts.filterUri(uri: "dag://" + name + "/**").filterTypes(types: ["Expertise"]))
-  }
-
-  let expertiseIn(selection: Artifacts!): [Expertise!]! {
-    selection.asExpertise.{{id}}.map { node(id: _.id).{{... on Expertise!}} }
+    ws.artifacts
+      .filterUri(uri: "dag://" + name + "/**")
+      .filterTypes(types: ["Expertise"])
+      .asExpertise
+      .{{id}}
+      .map { node(id: _.id).{{... on Expertise!}} }
   }
 
   # The warning for a selection with no artifact of the type a tool runs, e.g.
