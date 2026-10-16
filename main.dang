@@ -35,16 +35,17 @@ type Editor {
 
   The module is added to the workspace config and its default expertise (the
   functions it marks @agent) is composed into THIS conversation — no restart,
-  no lost context. Nothing else is added or refreshed: other modules in the
-  workspace stay out of the conversation, and the rest of the expertise it was
-  already composed from is left as it is. Existing tool-state field values are
-  preserved automatically, taking precedence over updated defaults; new fields
+  no lost context. Nothing else is added: other modules in the workspace stay
+  out of the conversation, and expertise it was already composed from other
+  modules is left as it is. Existing tool-state field values are preserved
+  automatically, taking precedence over updated defaults; new fields
   initialize normally. If a module fails to load or its saved state is
   incompatible, the call fails and the session keeps its previous tools and
   state.
 
   Installing a module that is already configured composes its default
-  expertise too, refreshing whatever of it is already composed.
+  expertise too; if any of it is already composed, all of that module's
+  composed expertise is refreshed.
   """
   install(
     llm: LLM!,
@@ -64,7 +65,7 @@ type Editor {
       print(`WARNING: ${ref} has no default expertise (no @agent functions), so none of its tools were composed. Its artifacts are still addressable.`)
       return base
     }
-    # Entries already recorded are refreshed in place, others appended.
+    # A recorded entry refreshes its module's recorded entries; new ones append.
     base.compose(expertise: defaults)
   }
 
@@ -85,8 +86,9 @@ type Editor {
   Reload only refreshes what is already composed; it never adds expertise,
   even from newly configured modules (use install for that). An entry the
   workspace no longer has, e.g. after checking out another repository, is run
-  again from where it was recorded. Tools and prompts added outside any
-  expertise are left alone.
+  again from where it was recorded. Each refreshed module's contributions are
+  replaced; other modules' contributions, and ones made outside any module,
+  are left alone.
   """
   reload(llm: LLM!): LLM! {
     let recorded = llm.expertise.{{id, artifact.{{uri}}}}
@@ -104,7 +106,7 @@ type Editor {
       let found = ws.artifacts.filterUri(uri: e.artifact.uri).asExpertise.{{id}}
       node(id: found[0].id ?? e.id).{{... on Expertise!}}
     }
-    # Entries already recorded are refreshed in place.
+    # Each recorded entry refreshes its module's recorded entries.
     llm.withWorkspace(ws).compose(expertise: entries)
   }
 
