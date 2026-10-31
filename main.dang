@@ -316,7 +316,7 @@ type Editor {
       # `values` runs every check and keeps each failure as data rather than
       # raising it: what the model reads is this call's trace, where each
       # failure is a ✘ row carrying the failing exec's output and exit code.
-      matched.values.{{id}}
+      matched.asChecks.{{sync}}
     }
     null
   }
@@ -340,8 +340,7 @@ type Editor {
   ): Changeset {
     let generators = targets
       .filterTypes(["Generator"])
-      .asGenerators
-      .{{id}}
+      .asGenerators.{{id}}
     if (generators.isEmpty) {
       print(noneOfType(targets, "generator", "Generator"))
       null
@@ -741,11 +740,11 @@ type Editor {
   # The functions a module marks @agent: what install composes. A bare module
   # address selects only the module object itself, so match its whole tree.
   let defaultExpertise(ws: Workspace!, name: String!): [Expertise!]! {
-    ws.artifacts
+    ws
+      .artifacts
       .filterUri(uri: "dag://" + name + "/**")
       .filterTypes(types: ["Expertise"])
-      .asExpertise
-      .{{id}}
+      .asExpertise.{{id}}
       .map { node(id: _.id).{{... on Expertise!}} }
   }
 
