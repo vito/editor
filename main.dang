@@ -313,10 +313,11 @@ type Editor {
     if (matched.items.{{path}}.isEmpty) {
       print(noneOfType(targets, "check", "Check"))
     } else {
-      # `values` runs every check and keeps each failure as data rather than
+      # `sync` runs every check and keeps each failure as data rather than
       # raising it: what the model reads is this call's trace, where each
       # failure is a ✘ row carrying the failing exec's output and exit code.
-      matched.asChecks.{{sync}}
+      # It returns the completed Check, an object, so select its id.
+      matched.asChecks.{{sync.{{id}}}}
     }
     null
   }
